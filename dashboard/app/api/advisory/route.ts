@@ -9,6 +9,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { runAdvisoryCheck }          from '@/lib/advisory'
 import { auth }                       from '@/lib/auth'
 import { Redis }                      from '@upstash/redis'
+import { parseRepoSlug }               from '@/lib/repo-validation.mjs'
+import { consumeRateLimit, requestIdentity } from '@/lib/rate-limit.mjs'
 
 export const dynamic = 'force-dynamic'
 
@@ -16,12 +18,10 @@ const redis = Redis.fromEnv()
 
 export async function GET(req: NextRequest) {
   const repo = new URL(req.url).searchParams.get('repo')
-  if (!repo) return NextResponse.json({ error: 'repo param required' }, { status: 400 })
+  const parsedRepo = parseRepoSlug(repo)
+  if (!parsedRepo) return NextResponse.json({ error: 'Invalid repo format. Use owner/name or an https://github.com/owner/name URL' }, { status: 400 })
 
-  const parts = repo.replace('https://github.com/', '').replace(/\/$/, '').split('/')
-  if (parts.length < 2) return NextResponse.json({ error: 'Invalid repo format' }, { status: 400 })
-
-  const [owner, name] = parts
+  const { owner, name } = parsedRepo
   const cacheKey      = `advisory:${owner}:${name}`
 
   // ── Try cache first ──
@@ -39,6 +39,8 @@ export async function GET(req: NextRequest) {
   try {
     const session = await auth()
     const token   = (session as any)?.accessToken ?? process.env.GITHUB_TOKEN
+    const limit = await consumeRateLimit(redis, requestIdentity(req, (session as any)?.user?.email), 'advisory')
+    if (!limit.allowed) return NextResponse.json({ error: 'rate_limited', message: 'Advisory scan rate limit exceeded. Try again shortly.' }, { status: 429, headers: limit.headers })
 
     const report = await runAdvisoryCheck(owner, name, token)
 

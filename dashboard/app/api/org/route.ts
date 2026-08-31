@@ -1,14 +1,22 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { analyzeRepo } from '@/lib/scorer'
 import { auth } from '@/lib/auth'
+import { consumeRateLimit, requestIdentity } from '@/lib/rate-limit.mjs'
+import { getRedis } from '@/lib/redis'
+
+const ORG_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/
 
 export async function GET(req: NextRequest) {
   const org = new URL(req.url).searchParams.get('org')
-  if (!org) return NextResponse.json({ error: 'org param required' }, { status: 400 })
+  if (!org || org.length > 39 || !ORG_PATTERN.test(org)) {
+    return NextResponse.json({ error: 'Invalid organization name' }, { status: 400 })
+  }
 
   try {
     const session = await auth()
     const token = (session as any)?.accessToken ?? process.env.GITHUB_TOKEN
+    const limit = await consumeRateLimit(getRedis(), requestIdentity(req, (session as any)?.user?.email), 'org')
+    if (!limit.allowed) return NextResponse.json({ error: 'rate_limited', message: 'Organization analysis rate limit exceeded. Try again shortly.' }, { status: 429, headers: limit.headers })
 
     const hdrs: Record<string, string> = {
       Accept: 'application/vnd.github.json',
