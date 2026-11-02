@@ -1,63 +1,219 @@
 name: Create Release
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag to create (e.g. v1.0.0)'
+        description: 'Version tag to create (e.g. v2.0.8)'
         required: true
-        default: 'v1.0.0'
-      floating_tag:
-        description: 'Floating major tag (e.g. v1)'
-        required: true
-        default: 'v1'
+        default: 'v2.0.8'
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+concurrency:
+  group: devlens-release-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   release:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      security-events: read
+
     steps:
-      - uses: actions/checkout@v4.2.2
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          fetch-tags: true
 
-      - name: Create and push tags
+      - name: Determine whether this change requires a release
+        id: release
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          BEFORE_SHA: ${{ github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          git fetch --tags --force origin
+
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            TAG="$INPUT_TAG"
+            SHOULD_RELEASE=true
+          else
+            mapfile -t CHANGED_FILES < <(git diff --name-only "$BEFORE_SHA" "$HEAD_SHA")
+
+            CRITICAL=false
+            for file in "${CHANGED_FILES[@]}"; do
+              case "$file" in
+                action.yml|scripts/devlens.py|requirements.txt|.github/workflows/release.yml|.github/workflows/action-v2-validation.yml|.github/workflows/devlens-live-integration.yml)
+                  CRITICAL=true
+                  echo "Critical release path changed: $file"
+                  ;;
+              esac
+            done
+
+            if [[ "$CRITICAL" != "true" ]]; then
+              echo "No critical production change detected. No release required."
+              SHOULD_RELEASE=false
+              TAG=""
+            else
+              SHOULD_RELEASE=true
+              ACTION_VERSION="$(grep -m1 -o 'action_version":"[0-9.]*' scripts/devlens.py | sed 's/.*":"//')"
+              if [[ -z "$ACTION_VERSION" ]]; then
+                echo "Could not determine action version from scripts/devlens.py"
+                exit 1
+              fi
+              TAG="v$ACTION_VERSION"
+              echo "Automatic critical-change release: $TAG"
+            fi
+          fi
+
+          if [[ "$SHOULD_RELEASE" == "true" ]]; then
+            case "$TAG" in
+              v2.*.*) ;;
+              *)
+                echo "Release tag must match v2.x.x: $TAG"
+                exit 1
+                ;;
+            esac
+          fi
+
+          echo "should_release=$SHOULD_RELEASE" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Pre-release static validation
+        if: steps.release.outputs.should_release == 'true'
         shell: bash
         run: |
-          git config user.name  "github-actions[bot]"
+          set -euo pipefail
+          python -m py_compile scripts/devlens.py
+          test -f action.yml
+          test -f requirements.txt
+          grep -Fx 'requests==2.34.2' requirements.txt
+          grep -Fx 'PyGithub==2.10.0' requirements.txt
+
+      - name: Pre-release live Action validation
+        if: steps.release.outputs.should_release == 'true'
+        id: preflight
+        uses: ./
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          update_readme: 'false'
+
+      - name: Validate live release candidate
+        if: steps.release.outputs.should_release == 'true'
+        env:
+          SCORE: ${{ steps.preflight.outputs.health_score }}
+          REPORT: ${{ steps.preflight.outputs.report_json }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        shell: python
+        run: |
+          import json
+          import os
+          import re
+
+          score = int(os.environ["SCORE"])
+          assert 0 <= score <= 100
+
+          report = json.loads(os.environ["REPORT"])
+          assert report["score_model"] == "action-v2-9d"
+
+          action_version = str(report["action_version"])
+          assert re.fullmatch(r"2\.[0-9]+\.[0-9]+", action_version), action_version
+
+          release_version = os.environ["RELEASE_TAG"][1:]
+          assert action_version == release_version, (
+              f"Action version {action_version} does not match release {release_version}"
+          )
+
+          assert set(report["scores"]) == {
+              "readme", "activity", "freshness", "docs", "ci",
+              "issues", "community", "pr_velocity", "security",
+          }
+
+          print(f"Release preflight passed: {score}/100; action version {action_version}")
+
+      - name: Validate versioned tag state
+        if: steps.release.outputs.should_release == 'true'
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          HEAD_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --tags --force origin
+          if git rev-parse --verify --quiet "refs/tags/$RELEASE_TAG" >/dev/null; then
+            TAG_SHA="$(git rev-list -n 1 "$RELEASE_TAG^{commit}")"
+            if [[ "$TAG_SHA" != "$HEAD_SHA" ]]; then
+              echo "Existing versioned tag $RELEASE_TAG points to $TAG_SHA, not release candidate $HEAD_SHA."
+              echo "Versioned release tags are immutable; bump the Action version before releasing new content."
+              exit 1
+            fi
+            echo "Existing versioned tag is already anchored to this release candidate: $RELEASE_TAG"
+          else
+            echo "Versioned release tag does not exist yet: $RELEASE_TAG"
+          fi
+
+      - name: Create versioned release tag
+        if: steps.release.outputs.should_release == 'true'
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          HEAD_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          # Create versioned tag
-          git tag -a "${{ github.event.inputs.tag }}" \
-            -m "Release ${{ github.event.inputs.tag }}"
-          git push origin "${{ github.event.inputs.tag }}"
+          git fetch --tags --force origin
+          if git rev-parse --verify --quiet "refs/tags/$RELEASE_TAG" >/dev/null; then
+            echo "Release tag already exists at the validated candidate: $RELEASE_TAG"
+          else
+            git tag -a "$RELEASE_TAG" "$HEAD_SHA" -m "Release $RELEASE_TAG"
+            git push origin "$RELEASE_TAG"
+            echo "Created release tag: $RELEASE_TAG"
+          fi
 
-          # Create / force-update floating major tag
-          git tag -fa "${{ github.event.inputs.floating_tag }}" \
-            -m "Floating tag ${{ github.event.inputs.floating_tag }} -> ${{ github.event.inputs.tag }}"
-          git push origin "${{ github.event.inputs.floating_tag }}" --force
+      - name: Update floating v2 tag
+        if: steps.release.outputs.should_release == 'true'
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git fetch --tags --force origin
+          git tag -fa v2 -m "Floating tag v2 -> $RELEASE_TAG" "$RELEASE_TAG"
+          git push origin v2 --force
 
       - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2.2.2
+        if: steps.release.outputs.should_release == 'true'
+        uses: softprops/action-gh-release@v3
         with:
-          tag_name: ${{ github.event.inputs.tag }}
-          name: "DevLens ${{ github.event.inputs.tag }}"
+          tag_name: ${{ steps.release.outputs.tag }}
+          name: "DevLens ${{ steps.release.outputs.tag }}"
           body: |
-            ## 🚀 DevLens ${{ github.event.inputs.tag }}
+            ## DevLens ${{ steps.release.outputs.tag }}
 
             ### What's included
-            - Repository health scoring across 7 dimensions
-            - Auto-inject live badge into README on every push
-            - Weekly digest workflow
-            - Zero-config setup
+            - Repository health scoring across 9 dimensions
+            - Automatic README score block updates
+            - GitHub Actions job summary and machine-readable outputs
+            - Live GitHub API integration testing
+            - Zero hosted service dependency
 
             ### Usage
             ```yaml
-            - uses: samotech/devlens@v1
+            - uses: SamoTech/devlens@v2
             ```
           draft: false
           prerelease: false

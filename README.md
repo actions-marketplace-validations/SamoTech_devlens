@@ -1,298 +1,353 @@
 <div align="center">
 
-![DevLens](docs/assets/banner.svg)
+![DevLens](docs/banner.svg)
 
-<img src="https://img.shields.io/badge/DevLens-Repo%20Intelligence-brightgreen?style=for-the-badge&logo=github" alt="DevLens"/>
+<img src="https://img.shields.io/badge/DevLens-GitHub%20Action-brightgreen?style=for-the-badge&logo=github" alt="DevLens GitHub Action"/>
 <img src="https://img.shields.io/github/license/SamoTech/devlens?style=for-the-badge" alt="License"/>
 <img src="https://img.shields.io/github/stars/SamoTech/devlens?style=for-the-badge" alt="Stars"/>
-<img src="https://img.shields.io/badge/Free%20Forever-$0-blue?style=for-the-badge" alt="Free Forever"/>
-<img src="https://visitor-badge.laobi.icu/badge?page_id=SamoTech.devlens&left_color=%23555555&right_color=%2301696f&left_text=visitors" alt="Visitors"/>
 
 # 🔭 DevLens
 
-**Repo health scoring in 9 dimensions + real cybersecurity vulnerability scanning. Free forever, live from the GitHub API.**
+**A GitHub Action that scores the repository where it runs across 9 transparent health dimensions.**
 
-[🌐 Live Dashboard](https://devlens-io.vercel.app) · [🔐 Security Scanner](https://devlens-io.vercel.app/security) · [📖 Docs](https://devlens-io.vercel.app/docs) · [📊 Stats](https://devlens-io.vercel.app/stats) · [💛 Sponsor](https://github.com/sponsors/SamoTech)
+No dashboard. No hosted database. No account required. The repository being scored is the user's own GitHub repository, identified automatically by `github.repository`.
+
+[GitHub Marketplace](https://github.com/marketplace/actions/devlens-repo-health) · [Latest v2.1.0 release](https://github.com/SamoTech/devlens/releases/tag/v2.1.0)
 
 </div>
 
 ---
 
-<!-- DEVLENS:START -->
-> The README health snapshot is maintained by the GitHub Action (`action-v1-7d`). It is a historical CI result, not a live `dashboard-v2-9d` dashboard score. Run the dashboard or the Action to generate a current result.
-<!-- DEVLENS:END -->
+## What DevLens does
 
----
+Add one GitHub Actions workflow to your repository.
 
-## ✨ What DevLens Does
+DevLens then:
 
-Paste a public GitHub repository slug or canonical URL into [devlens-io.vercel.app](https://devlens-io.vercel.app) to get a live health report. Security coverage depends on scanner availability and configured credentials; the dashboard shows failed and unavailable modules explicitly rather than treating them as clean.
+1. Reads the repository directly through the GitHub API.
+2. Calculates a transparent 0–100 score across 9 dimensions.
+3. Publishes the score in the GitHub Actions job summary.
+4. Exposes `health_score`, `badge_url`, and the complete `report_json` as Action outputs.
+5. Optionally writes the current score and dimension table between `DEVLENS:START` / `DEVLENS:END` markers in your README.
+6. Can fail CI when the repository falls below a threshold you choose.
 
-| Feature | Details | Free |
-|---|---|---|
-| 🏥 **9-dimension health score** | Dashboard score model `dashboard-v2-9d`, bounded 0–100, adjustable sliders | ✅ |
-| 🔐 **Security Intelligence Engine** | 13 network modules plus locally available CLI integrations; every module reports status | ✅ |
-| 📊 **Live GitHub API** | Every score fetched fresh from GitHub, 15-min Redis cache | ✅ |
-| 📈 **Trend history** | Weekly snapshots stored in Redis when persistence is configured | ✅ |
-| 🏢 **Org analysis** | Score all public repos in any GitHub org, ranked by health | ✅ |
-| ⚖️ **Side-by-side compare** | Analyze two repos at once at `/compare` | ✅ |
-| 🏆 **Leaderboard** | Top-scoring repos from all DevLens users at `/leaderboard` | ✅ |
-| ✅ **Checked repos** | Searchable list of recently analyzed repos at `/checked` | ✅ |
-| 📡 **Stats** | Live usage counters: analyses, visitors, top repos at `/stats` | ✅ |
-| 🎖️ **README badge** | Live shields.io badge for your README at `/badge` | ✅ |
-| 🌗 **Dark / light mode** | System preference + manual toggle | ✅ |
+The Action scores **the repository where it is installed**. There is no separate DevLens web application involved.
 
----
+## 9 dimensions
 
-## 🔐 Security Intelligence Engine — 13 Free Scan Modules
+| Dimension | Weight |
+|---|---:|
+| 📝 README Quality | 20% |
+| 🔥 Commit Activity | 20% |
+| 🌿 Repo Freshness | 10% |
+| 📚 Documentation | 10% |
+| ⚙️ CI/CD Setup | 10% |
+| 🎯 Issue Response | 10% |
+| ⭐ Community Signal | 5% |
+| 🔀 PR Velocity | 10% |
+| 🔐 Security | 5% |
 
-DevLens v1.1.0 ships a full vulnerability scanner at [/security](https://devlens-io.vercel.app/security). Every module uses a **100% free API** — no paid plans, no credit card.
+The weighted result is bounded to 0–100. DevLens does not artificially force a repository to 100.
 
-```
-Module                    Source                         Auth Needed
-──────────────────────────────────────────────────────────────────────────
-1. Dependabot CVEs        github.com API                 GITHUB_TOKEN
-2. Secret Scanning        github.com API                 GITHUB_TOKEN
-3. Code Scanning (SAST)   github.com API (CodeQL)        GITHUB_TOKEN
-4. OSV.dev                api.osv.dev                    None (free)
-5. NIST NVD               services.nvd.nist.gov          Optional key (free)
-6. GitHub Advisory DB     api.github.com GraphQL         GITHUB_TOKEN
-7. PyPI Safety DB         osv.dev × requirements.txt     None (free)
-8. Retire.js CDN Check    osv.dev × HTML script src      None (free)
-9. License Risk           github.com API                 GITHUB_TOKEN
-10. CI Check Runs         github.com API                 GITHUB_TOKEN
-11. SonarCloud            sonarcloud.io API              None (public repos)
-12. DeepSource            api.deepsource.io GraphQL      None (public repos)
-13. Codecov               codecov.io API                 None (public repos)
-```
+## Install in 60 seconds
 
-### Security Score Formula (0–100)
-
-The security score is `security-v2`. It is an evidence score, not a claim that every scanner completed. The API also returns `scanner_statuses`, `scanner_summary`, and `scoring.confidence`; when any scanner is failed, unavailable, rate limited, timed out, unauthorized, or not configured, the UI displays a degraded-scan warning.
-
-| Module | Max Deduction |
-|---|---|
-| Dependabot (critical/high/medium CVEs) | −30 pts |
-| Secret scanning open alerts | −25 pts |
-| Code scanning SAST findings | −24 pts |
-| OSV.dev dependency vulns | −28 pts |
-| NIST NVD CVEs | −27 pts |
-| GitHub Advisory DB hits | −21 pts |
-| PyPI Safety DB vulns | −27 pts |
-| Retire.js vulnerable CDN libs | −20 pts |
-| Missing SECURITY.md | −3 pts |
-| Copyleft / missing license | −5 pts |
-
-### Security API
-
-```bash
-# Full security scan (cached 15 min)
-GET https://devlens-io.vercel.app/api/security?repo=owner/name
-
-# Force fresh scan (bypass cache)
-GET https://devlens-io.vercel.app/api/security?repo=owner/name&force=1
-```
-
----
-
-## 📊 The 9 Health Dimensions
-
-```
-Dimension         Default Weight   What it measures
-────────────────────────────────────────────────────────────────────
-README Quality         20%   Length, keywords, code blocks, images, headings
-Commit Activity        20%   Commits to default branch in last 90 days
-Repo Freshness         10%   Days since last push (≤7 days = 100)
-Documentation          10%   LICENSE, CONTRIBUTING, CHANGELOG, SECURITY, docs/
-CI/CD Setup            10%   GitHub Actions workflow count
-Issue Response         10%   Closed-to-total issue ratio
-Community Signal        5%   Logarithmic score from stars + forks
-PR Velocity            10%   Average PR merge time (last 20 merged PRs)
-Security                5%   Advisory/security evidence summary
-```
-
-Weights are **fully adjustable** in the UI via sliders — they auto-normalize to 100%.
-
----
-
-## 🌐 Dashboard Pages
-
-| Page | URL | Description |
-|---|---|---|
-| Analyze | `/` | Analyze any public repo, adjust weights |
-| Security | `/security` | 13-module vulnerability & code quality scanner |
-| Org | `/org` | Score all repos in a GitHub org |
-| Compare | `/compare` | Side-by-side two-repo comparison |
-| Leaderboard | `/leaderboard` | Top-scoring repos from all users |
-| Checked | `/checked` | Full searchable recently-analyzed list |
-| Badge | `/badge` | Generate a live README badge |
-| Stats | `/stats` | Live usage stats (analyses, visitors, top repos) |
-| Docs | `/docs` | Full API reference + scoring algorithm + self-hosting |
-| Changelog | `/changelog` | Release history |
-| Sponsor | `/sponsor` | Support the project |
-
----
-
-## 🚀 Quick Start — Add Badge to Your README
-
-### Option A — Static badge
-
-```markdown
-[![DevLens Health](https://devlens-io.vercel.app/api/badge/owner/name)](https://devlens-io.vercel.app/?repo=owner/name)
-```
-
-### Option B — Auto-updating via GitHub Actions
-
-1. Add markers to your `README.md`:
-
-```markdown
-<!-- DEVLENS:START -->
-<!-- DEVLENS:END -->
-```
-
-2. Create `.github/workflows/devlens.yml`:
+Create `.github/workflows/devlens.yml` in the repository you want to score:
 
 ```yaml
-name: DevLens Health Check
+name: DevLens
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  security-events: read
+
+jobs:
+  health:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Score repository
+        uses: SamoTech/devlens@v2
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          update_readme: 'true'
+          readme_branch: ''
+          badge_style: flat-square
+```
+
+Commit the workflow, open the **Actions** tab, and run **DevLens**. The Action automatically scores the repository where the workflow runs; you do not register the repository anywhere.
+
+For the default installation, `contents: write` is required because README persistence is enabled by default. `security-events: read` enables security-related API checks; DevLens remains conservative when those APIs are unavailable.
+
+### Choose the installation that matches your repository
+
+**Recommended — README report enabled**
+
+Use this when you want DevLens to maintain the health report in the repository README. This is the standard installation shown above.
+
+- `contents: write` is required for the README update.
+- `security-events: read` enables the security-related checks.
+- No repository registration or DevLens account is required.
+
+**Read-only — no repository writes**
+
+Use this when repository policy does not allow the workflow to write files. Set `update_readme: 'false'` and use `contents: read`. DevLens still publishes the score and report through the Actions run.
+
+**CI gate — enforce a minimum score**
+
+Use this when DevLens is part of a quality gate. Add `fail_on_score_below` to the normal installation:
+
+```yaml
+with:
+  github_token: ${{ secrets.GITHUB_TOKEN }}
+  update_readme: 'true'
+  fail_on_score_below: '80'
+```
+
+The threshold only controls whether the Action fails; it does not change the calculated score.
+
+### First-run checklist
+
+1. Save the workflow under `.github/workflows/` in the repository you want to score.
+2. Commit the workflow and confirm GitHub recognizes it in the **Actions** tab.
+3. Check the workflow `permissions` block. Use `contents: write` only when README persistence is enabled.
+4. Confirm `github_token` is mapped to `${{ secrets.GITHUB_TOKEN }}`.
+5. Run the workflow manually with `workflow_dispatch` when you want to test the installation without waiting for a push.
+6. Open the completed run and inspect the DevLens job summary and `health_score` output.
+7. If README persistence is enabled, confirm the `DEVLENS:START` / `DEVLENS:END` block was updated on the intended branch.
+
+### Common first-run failures
+
+**The workflow is not appearing in Actions:** Confirm the file path is under `.github/workflows/`, the YAML is valid, and the workflow has been committed to GitHub.
+
+**The Action fails with a permissions error:** Compare the workflow `permissions` block with the installation mode. README persistence needs `contents: write`; read-only scoring can use `contents: read` with `update_readme: 'false'`.
+
+**The score runs but README does not change:** Confirm `update_readme: 'true'`, verify the token can write repository contents, and check `readme_branch` if you intentionally target a branch other than the repository default.
+
+**You want to test README writes safely:** Create a disposable branch and set `readme_branch` to that branch. This lets you validate persistence without intentionally changing the production/default branch.
+
+
+## Common repository patterns
+
+DevLens does not have separate scoring modes for different repository types. The same Action scores the repository where it runs; these examples show practical workflow choices for common setups.
+
+### Application or service repository
+
+Run on changes to the default branch and allow README persistence:
+
+```yaml
 on:
   push:
     branches: [main]
-  schedule:
-    - cron: '0 9 * * 1'   # every Monday 09:00 UTC
+  workflow_dispatch:
+
 permissions:
   contents: write
+  security-events: read
+
 jobs:
-  devlens:
+  health:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - name: Fetch DevLens score
-        run: |
-          curl -s "https://devlens-io.vercel.app/api/analyze?repo=${{ github.repository }}" \
-            | jq '.healthScore'
+      - uses: SamoTech/devlens@v2
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          update_readme: 'true'
 ```
 
-> `GITHUB_TOKEN` is automatic — no setup needed.
+Use this when the repository's health report should stay visible in the README after normal development activity.
 
----
+### Open-source library or package
 
-## 🔌 API Reference
+Run after changes and keep a manual trigger for maintainers:
 
-```bash
-# Analyze a repo
-GET https://devlens-io.vercel.app/api/analyze?repo=owner/name
+```yaml
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
 
-# Full security + vulnerability scan
-GET https://devlens-io.vercel.app/api/security?repo=owner/name
-GET https://devlens-io.vercel.app/api/security?repo=owner/name&force=1  # bypass cache
+permissions:
+  contents: write
+  security-events: read
 
-# Compare two repos
-GET https://devlens-io.vercel.app/api/compare?a=owner/a&b=owner/b
-
-# Score history (last 12 weekly snapshots)
-GET https://devlens-io.vercel.app/api/history?repo=owner/name
-
-# Recently checked repos
-GET https://devlens-io.vercel.app/api/watchlist
-
-# Badge data
-GET https://devlens-io.vercel.app/api/badge/owner/name
-
-# Live usage stats
-GET https://devlens-io.vercel.app/api/stats
+jobs:
+  health:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: SamoTech/devlens@v2
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          update_readme: 'true'
+          fail_on_score_below: '70'
 ```
 
-### Runtime request budgets
+Use the threshold only when maintainers want repository health to act as a CI quality signal. The threshold does not modify the score.
 
-The dashboard applies Redis-backed per-minute budgets to bound expensive work: analysis and history allow 30 requests per client identity, advisory 10, compare 10, organization analysis 3, security scans 5, and watchlist operations 30. When a request exceeds its budget, the API returns HTTP `429` with `Retry-After` and rate-limit headers. If Redis is unavailable, the application reports degraded persistence or rate-limit protection rather than claiming a successful write or complete security result.
+### Monorepo or high-change repository
 
----
+Run the same repository-wide score on the default branch and use manual runs when needed:
 
-## 🛠️ Self-Hosting
+```yaml
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
 
-```bash
-git clone https://github.com/SamoTech/devlens
-cd devlens/dashboard
-npm install
-cp .env.example .env.local   # fill in env vars
-npm run dev                   # → http://localhost:3000
+permissions:
+  contents: write
+  security-events: read
+
+jobs:
+  health:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: SamoTech/devlens@v2
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          update_readme: 'true'
+          readme_branch: ''
 ```
 
-**Environment variables:**
+DevLens evaluates the GitHub repository as a whole. It does not score individual packages or subdirectories separately.
 
-```env
-# GitHub OAuth (Sign in with GitHub)
-AUTH_GITHUB_ID=
-AUTH_GITHUB_SECRET=
-AUTH_SECRET=
+### Restricted or read-only repository
 
-# Upstash Redis (watchlist, history, stats, cache)
-UPSTASH_REDIS_REST_URL=
-UPSTASH_REDIS_REST_TOKEN=
+If repository policy prohibits workflow writes, use the least-privilege read-only configuration:
 
-# Optional server-side GitHub token for higher upstream API quota and security modules
-GITHUB_TOKEN=
+```yaml
+permissions:
+  contents: read
+  security-events: read
 
-# NIST NVD API key — free, raises rate limit 10×
-# Register at: https://nvd.nist.gov/developers/request-an-api-key
-NVD_API_KEY=        # optional but recommended
+jobs:
+  health:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: SamoTech/devlens@v2
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          update_readme: 'false'
 ```
 
-**Deploy to Vercel:**
-```bash
-vercel --cwd dashboard
-# Set Root Directory = dashboard in Vercel project settings
+This keeps the score and Actions summary while avoiding README writes.
+
+## README result
+
+DevLens maintains this block automatically:
+
+```markdown
+<!-- DEVLENS:START -->
+...current score and dimension report...
+<!-- DEVLENS:END -->
 ```
 
----
+Only the content between the markers is replaced. If the markers do not exist, DevLens appends them.
 
-## 🗺️ Roadmap
+## Inputs
 
-- [x] 9-dimension health score engine
-- [x] Adjustable weight sliders with auto-normalization
-- [x] Redis-backed watchlist, history snapshots, stats counters
-- [x] Live trend chart from real historical data
-- [x] Org analysis (up to 30 repos ranked by health)
-- [x] Leaderboard, Checked, Stats, Badge pages
-- [x] Full API with response shapes documented
-- [x] GitHub Actions integration
-- [x] Dark / light mode
-- [x] SEO: sitemap, robots.txt, Open Graph
-- [x] **Security Intelligence Engine — 13 free scan modules** ✨ *new in v1.1.0*
-- [x] **NIST NVD integration** ✨ *new in v1.1.0*
-- [x] **GitHub Advisory Database GraphQL** ✨ *new in v1.1.0*
-- [x] **PyPI Safety DB scanning** ✨ *new in v1.1.0*
-- [x] **Retire.js CDN vulnerability heuristic** ✨ *new in v1.1.0*
-- [ ] GitHub Advisory cross-reference with actual installed versions
-- [ ] Email digest (Resend free tier)
-- [ ] Slack / Discord notifications
-- [ ] Private repo support (GitHub OAuth)
-- [ ] Multi-repo portfolio dashboard
-- [ ] GitHub Marketplace Action listing
+| Input | Required | Default | Description |
+|---|---|---|---|
+| `github_token` | Yes | — | GitHub token used for repository inspection |
+| `update_readme` | No | `true` | Write the score report to README |
+| `readme_branch` | No | empty | Branch to update; empty uses the repository default branch |
+| `badge_style` | No | `flat` | Shields.io badge style |
+| `fail_on_score_below` | No | empty | Fail the Action below this 0–100 score |
+| `notify_discord` | No | empty | Optional Discord webhook |
 
----
+## Outputs
 
-## 💛 Sponsor
+| Output | Description |
+|---|---|
+| `health_score` | Overall score from 0 to 100 |
+| `badge_url` | Shields.io badge URL for the current score |
+| `report_json` | Machine-readable report containing all nine dimensions |
 
-DevLens is — and always will be — **completely free**. No trials. No paywalls.
+## Common installation problems
 
-If DevLens saves you time, [a small sponsorship](https://github.com/sponsors/SamoTech) keeps this project alive and funds new features.
+**Permissions error:** The default installation writes `README.md`, so the workflow needs `contents: write`. For a read-only run, set `update_readme: 'false'` and use `contents: read`.
 
----
+**README was not updated:** Confirm `update_readme: 'true'` and `contents: write`. If `readme_branch` is set, that branch must be writable by the supplied token.
 
-## 🤝 Contributing
+**Security score is conservative:** GitHub security APIs can be unavailable or permission-restricted. DevLens deliberately does not convert unavailable security evidence into a high score.
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). PRs welcome!
+**Testing without changing the default branch:** Set `readme_branch` to a disposable branch. README persistence is designed to be testable without mutating the production branch.
 
----
+## CI quality gate
 
-## 📄 License
+```yaml
+- uses: SamoTech/devlens@v2
+  with:
+    github_token: ${{ secrets.GITHUB_TOKEN }}
+    update_readme: 'true'
+    fail_on_score_below: '80'
+```
 
-MIT © [SamoTech](https://github.com/SamoTech)
+## Versioning
 
----
+Production workflows should use `@v2`, not `@main`. Pin to a specific release tag or full commit SHA when you require immutable supply-chain control.
 
-<div align="center">
-  <sub>Built with Next.js · Upstash Redis · GitHub API · NIST NVD · OSV.dev · ☕ by SamoTech<br/>
-  Free forever. If it helped you, <a href="https://github.com/sponsors/SamoTech">a small sponsorship</a> keeps the lights on. 💛</sub>
-</div>
+The current latest verified v2 release is `v2.0.8`. The release preflight verified the Action version and the nine-dimension report before publication. The floating `v2` tag tracks the latest verified v2 release.
+
+## Runtime dependencies
+
+The Action installs its direct Python dependencies from the repository's pinned `requirements.txt` rather than resolving unpinned packages at runtime.
+
+## Testing
+
+DevLens has two validation layers:
+
+- Static validation compiles the scorer and validates the Action metadata.
+- Live integration executes the actual composite Action against GitHub's API and validates its outputs and all nine dimensions.
+
+README persistence is also testable without mutating the production branch by setting `readme_branch` to a disposable test branch.
+
+Release automation runs a live Action preflight before creating the versioned tag and refuses to overwrite an existing versioned release tag.
+
+## Marketplace
+
+DevLens is a single public GitHub Action repository with `action.yml` at the root.
+
+The v2 distribution target is:
+
+- Latest verified release: `v2.0.8`
+- Consumer tag: `v2`
+- Version-reporting correction: released and verified in `v2.0.8`
+- Marketplace action: **DevLens Repo Health**
+- Distribution: GitHub Marketplace
+- PyPI: not a distribution target
+
+For production workflows:
+
+```yaml
+- uses: SamoTech/devlens@v2
+  with:
+    github_token: ${{ secrets.GITHUB_TOKEN }}
+```
+
+Marketplace publication status must be verified separately from GitHub Release status. Do not treat the existence of a GitHub Release alone as proof that Marketplace publication is complete.
+
+## AI agent project instructions
+
+AI agents working on this repository must start by reading this `README.md`, then read the authoritative master project document:
+
+`docs/AI_PROJECT_CONTEXT.md`
+
+That document is the project's master source of truth for product direction, architecture, decisions, roadmap, current state, testing rules, release rules, and AI-agent operating rules.
+
+AI agents must:
+
+1. Read `README.md` first.
+2. Read `docs/AI_PROJECT_CONTEXT.md` before making project-level decisions or implementation changes.
+3. Inspect the current repository state and relevant source/workflows.
+4. Build their working task prompt from the documented objective, constraints, acceptance criteria, and relevant decision/roadmap item.
+5. Follow the documented product boundary and never reintroduce removed architecture without an explicit product decision.
+6. Verify work with appropriate tests and real workflow/release evidence where applicable.
+7. Update affected project documentation in the same work session.
+8. Leave the repository accurate for the next AI agent.
+9. Do not declare meaningful work complete until implementation, verification, and required documentation are synchronized.
+
+**Documentation is part of the implementation. If code and project documentation disagree, investigate current repository/GitHub evidence and restore consistency rather than silently choosing one.**

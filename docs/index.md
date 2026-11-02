@@ -1,113 +1,142 @@
 # DevLens Documentation
 
-Welcome to the DevLens documentation. DevLens is a GitHub Action that gives your repository a health score across 7 dimensions and auto-updates your README with a live badge.
+DevLens is a GitHub Action that scores the repository where it runs across 9 transparent dimensions and can write the result into that repository's README.
 
-## Contents
+There is no hosted dashboard, database, or required DevLens account.
 
-- [Quick Start](../README.md#-quick-start)
-- [Health Score Dimensions](#health-score-dimensions)
-- [Configuration Reference](#configuration-reference)
-- [Inputs & Outputs](#inputs--outputs)
-- [Discord Integration](#discord-integration)
-- [AI Insights with Groq](#ai-insights-with-groq)
-- [FAQ](#faq)
+## Quick Start
 
----
+For the fastest installation path, use the workflow in `README.md`. It enables README persistence by default; use `update_readme: 'false'` with `contents: read` when you want a read-only installation.
+
+Create `.github/workflows/devlens.yml`:
+
+```yaml
+name: DevLens
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  security-events: read
+
+jobs:
+  health:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: SamoTech/devlens@v2
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          update_readme: 'true'
+          badge_style: flat-square
+```
+
+The Action automatically identifies the current repository from `github.repository`.
 
 ## Health Score Dimensions
 
-DevLens evaluates your repo across 7 weighted dimensions:
-
 | Dimension | Weight | What it measures |
-|---|---|---|
-| README Quality | 20% | Length, sections, badges, code blocks, keywords |
-| Commit Activity | 20% | Push frequency over last 90 days |
-| Repo Freshness | 15% | Days since last push |
-| Documentation | 15% | LICENSE, CONTRIBUTING, CHANGELOG, CODE_OF_CONDUCT, SECURITY, docs/ |
-| CI/CD Setup | 15% | GitHub Actions workflows present |
-| Issue Response | 10% | Closed vs open issue ratio |
-| Community Signal | 5% | Stars, forks, watchers |
+|---|---:|---|
+| README Quality | 20% | README completeness and useful project information |
+| Commit Activity | 20% | Recent commit activity |
+| Repo Freshness | 10% | Time since the latest repository activity |
+| Documentation | 10% | Standard project documentation files and docs directory |
+| CI/CD Setup | 10% | GitHub Actions workflow coverage |
+| Issue Response | 10% | Issue maintenance and closure signals |
+| Community Signal | 5% | Public stars and forks |
+| PR Velocity | 10% | Pull-request maintenance and merge-time signals |
+| Security | 5% | Repository security evidence and advisory signals |
 
----
+The weighted result is bounded to 0–100. External signals such as stars and forks are measured as they exist; DevLens does not manufacture a score.
 
-## Configuration Reference
+## README Integration
 
-### Minimal setup
+DevLens maintains:
 
-```yaml
-- uses: SamoTech/devlens@v1
-  with:
-    github_token: ${{ secrets.GITHUB_TOKEN }}
+```markdown
+<!-- DEVLENS:START -->
+...generated score report...
+<!-- DEVLENS:END -->
 ```
 
-### Full setup
+The Action replaces only the content between those markers.
 
-```yaml
-- uses: SamoTech/devlens@v1
-  with:
-    github_token: ${{ secrets.GITHUB_TOKEN }}
-    groq_api_key: ${{ secrets.GROQ_API_KEY }}
-    groq_model: 'llama-3.1-8b-instant'
-    badge_style: 'flat-square'
-    update_readme: 'true'
-    notify_discord: ${{ secrets.DISCORD_WEBHOOK }}
-```
+If the markers are absent, DevLens appends them to the README.
 
----
-
-## Inputs & Outputs
-
-### Inputs
+## Inputs
 
 | Input | Required | Default | Description |
 |---|---|---|---|
-| `github_token` | ✅ | — | `${{ secrets.GITHUB_TOKEN }}` |
-| `groq_api_key` | ❌ | `""` | Free Groq key for AI insights |
-| `groq_model` | ❌ | `llama-3.1-8b-instant` | Override Groq model |
-| `badge_style` | ❌ | `flat` | `flat`, `flat-square`, `for-the-badge` |
-| `update_readme` | ❌ | `true` | Auto-inject health badge |
-| `notify_discord` | ❌ | `""` | Discord webhook URL |
+| `github_token` | Yes | — | GitHub token used for repository inspection |
+| `badge_style` | No | `flat` | Shields.io badge style |
+| `update_readme` | No | `true` | Write the score report to README |
+| `readme_branch` | No | empty | Branch to update; empty uses the repository default branch |
+| `fail_on_score_below` | No | empty | Fail the Action below this 0–100 score |
+| `notify_discord` | No | empty | Optional Discord webhook |
 
-### Outputs
+## Outputs
 
 | Output | Description |
 |---|---|
-| `health_score` | Integer 0–100 |
-| `badge_url` | Ready-to-embed shields.io URL |
-| `report_json` | Full JSON of all dimension scores |
+| `health_score` | Integer from 0 to 100 |
+| `badge_url` | Shields.io badge URL |
+| `report_json` | Complete machine-readable report |
 
----
-
-## Discord Integration
-
-Set `DISCORD_WEBHOOK` as a repository secret, then pass it to the action:
+## CI Quality Gate
 
 ```yaml
-notify_discord: ${{ secrets.DISCORD_WEBHOOK }}
+- uses: SamoTech/devlens@v2
+  with:
+    github_token: ${{ secrets.GITHUB_TOKEN }}
+    update_readme: 'true'
+    fail_on_score_below: '80'
 ```
 
-The weekly digest includes all 7 dimension scores as a rich embed sent every Monday at 8am UTC.
+## Data and Privacy
 
----
+DevLens runs inside the user's GitHub Actions environment. The scoring implementation calls GitHub's API directly using the supplied Action token. The Action uses `GITHUB_API_URL`, so GitHub Enterprise deployments do not require a hard-coded `api.github.com` endpoint.
 
-## AI Insights with Groq
+No DevLens-hosted database is required for repository scoring. No Groq or AI provider is required for scoring.
 
-DevLens uses [Groq](https://console.groq.com) (free tier) to generate a 3-line AI-written health summary that gets injected into your README between the `<!-- DEVLENS:START -->` and `<!-- DEVLENS:END -->` markers.
+## Release and Distribution
 
-Get your free API key at [console.groq.com/keys](https://console.groq.com/keys).
+The current verified release is `v2.0.1`, with the floating production tag `v2`.
 
----
+Release automation lives in `.github/workflows/release.yml`:
 
-## FAQ
+1. A manual release dispatch creates a versioned `v2.x.x` tag.
+2. The tag push triggers the release job.
+3. Static and live Action preflight validation runs.
+4. The floating `v2` tag is moved to the released version.
+5. The GitHub Release is published.
 
-**Q: Does DevLens store any of my repo data?**  
-A: No. DevLens runs entirely inside GitHub Actions. No data leaves your repo.
+Marketplace publication is tracked separately from GitHub Release status. The repository is on `v2.0.1`, but the public Marketplace listing must be explicitly updated/published for that release; do not infer Marketplace freshness from the GitHub Release alone.
 
-**Q: Can I use DevLens on private repos?**  
-A: Yes. The `GITHUB_TOKEN` works for both public and private repos.
+## AI Agent Instructions
 
-**Q: What Groq models are supported?**  
-A: Any model available in your Groq project. Default is `llama-3.1-8b-instant`. Fast and free.
+This repository is designed to be maintainable across multiple AI agents.
 
-**Q: How do I get 100/100?**  
-A: Add `LICENSE`, `CONTRIBUTING.md`, `CHANGELOG.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md`, a `docs/` folder, maintain active commits, add CI workflows, and keep issues closed.
+Before making project-level changes, every AI agent must:
+
+1. Read `README.md`.
+2. Read `docs/AI_PROJECT_CONTEXT.md`.
+3. Inspect the current implementation and relevant workflows.
+4. Classify important assumptions as FACT, DECISION, PLAN, BLOCKER, or EXPERIMENT.
+5. Follow the Action-only product boundary.
+6. Verify implementation with appropriate tests and real GitHub Actions evidence when applicable.
+7. Update affected documentation in the same work session.
+8. Leave a clear handoff for the next agent.
+
+The authoritative agent/project context is:
+
+`docs/AI_PROJECT_CONTEXT.md`
+
+Do not reintroduce the removed dashboard, Vercel/Supabase core architecture, mandatory external AI scoring, or other former architecture without an explicit product decision.
+
+## Testing
+
+The repository contains a live integration workflow that executes the actual composite Action against GitHub's API and validates the resulting outputs and all 9 dimensions.
+
+This is the same execution path used when a user installs the Action in another repository.

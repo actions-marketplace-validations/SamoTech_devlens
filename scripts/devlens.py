@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
-"""DevLens - Core Analysis Engine v1.3"""
+"""DevLens GitHub Action v2 — standalone 9-dimension repository health analysis"""
 import os, json, math, requests
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from github import Github, Auth
 
 GITHUB_TOKEN  = os.environ["GITHUB_TOKEN"]
-GROQ_API_KEY  = os.environ.get("GROQ_API_KEY", "")
-GROQ_MODEL    = os.environ.get("GROQ_MODEL", "llama-3.1-8b-instant")
 BADGE_STYLE   = os.environ.get("BADGE_STYLE", "flat")
 UPDATE_README = os.environ.get("UPDATE_README", "true").lower() == "true"
 DISCORD_WH    = os.environ.get("DISCORD_WEBHOOK", "")
+README_BRANCH = os.environ.get("README_BRANCH", "").strip()
 REPO_NAME     = os.environ.get("REPO", "")
+GITHUB_API_URL = os.environ.get("GITHUB_API_URL", "https://api.github.com").rstrip("/")
 
-g    = Github(auth=Auth.Token(GITHUB_TOKEN))
+g    = Github(auth=Auth.Token(GITHUB_TOKEN), base_url=GITHUB_API_URL)
 repo = g.get_repo(REPO_NAME)
 now  = datetime.now(timezone.utc)
 
@@ -45,18 +45,15 @@ def score_readme():
 
 def score_activity():
     try:
-        month = now.month - 3
-        year  = now.year if month > 0 else now.year - 1
-        month = month if month > 0 else month + 12
-        since = datetime(year, month, now.day, tzinfo=timezone.utc)
-        commits = list(repo.get_commits(since=since))
-        n = len(commits)
+        since = (now - timedelta(days=90)).strftime("%Y-%m-%d")
+        n = g.search_commits(query=f"repo:{REPO_NAME} committer:>={since}").totalCount
         if n >= 30: return 100
         if n >= 15: return 75
         if n >= 5:  return 50
         if n >= 1:  return 25
         return 0
-    except: return 0
+    except Exception:
+        return 0
 
 def score_freshness():
     d = days_since(repo.pushed_at)
@@ -67,14 +64,29 @@ def score_freshness():
     return 10
 
 def score_docs():
-    s = 0
-    key_files = ["LICENSE", "CONTRIBUTING.md", "CHANGELOG.md", "CODE_OF_CONDUCT.md", "SECURITY.md", "docs/"]
+    score = 0
     try:
-        paths = [c.path for c in repo.get_git_tree("HEAD", recursive=True).tree]
-        for f in key_files:
-            if any(c.startswith(f.rstrip("/")) for c in paths): s += 16
-        return min(s, 100)
-    except: return 0
+        for path in ["LICENSE", "LICENSE.md", "LICENSE.txt"]:
+            try:
+                repo.get_contents(path)
+                score += 17
+                break
+            except Exception:
+                pass
+        for path in ["CONTRIBUTING.md", "CHANGELOG.md", "CODE_OF_CONDUCT.md", "SECURITY.md"]:
+            try:
+                repo.get_contents(path)
+                score += 17
+            except Exception:
+                pass
+        try:
+            repo.get_contents("docs")
+            score += 17
+        except Exception:
+            pass
+        return min(score, 100)
+    except Exception:
+        return 0
 
 def score_ci():
     try:
@@ -84,28 +96,80 @@ def score_ci():
         return 0
     except: return 0
 
+def score_issue_response(open_count, closed_count):
+    # Keep issue response deterministic and independent of pull-request closure activity.
+    """Score actual GitHub issues only; pull requests are excluded from both counts."""
+    if open_count < 0 or closed_count < 0:
+        raise ValueError("Issue counts cannot be negative")
+    total = open_count + closed_count
+    if total == 0:
+        return 100
+    return int(closed_count / total * 100)
+
 def score_issues():
     try:
-        open_i   = repo.open_issues_count
-        closed_i = list(repo.get_issues(state="closed"))[:50]
-        if not closed_i and open_i == 0: return 100
-        total = open_i + len(closed_i)
-        if total == 0: return 100
-        return int(len(closed_i) / total * 100)
-    except: return 50
+        # GitHub's /issues collection includes pull requests. Search with is:issue
+        # so the dimension measures issue response rather than PR closure activity.
+        open_i = g.search_issues(query=f"repo:{REPO_NAME} is:issue is:open").totalCount
+        closed_i = g.search_issues(query=f"repo:{REPO_NAME} is:issue is:closed").totalCount
+        return score_issue_response(open_i, closed_i)
+    except Exception:
+        return 50
 
 def score_community():
     return min(int(math.log1p(repo.stargazers_count)*15)+int(math.log1p(repo.forks_count)*10), 100)
 
-weights = {"readme":0.20,"activity":0.20,"freshness":0.15,"docs":0.15,"ci":0.15,"issues":0.10,"community":0.05}
+weights = {"readme":0.20,"activity":0.20,"freshness":0.10,"docs":0.10,"ci":0.10,"issues":0.10,"community":0.05,"pr_velocity":0.10,"security":0.05}
+def score_pr_velocity():
+    """Measure merged-PR throughput over the same 90-day window used for activity."""
+    try:
+        since = (now - timedelta(days=90)).strftime("%Y-%m-%d")
+        merged = g.search_issues(
+            query=f"repo:{REPO_NAME} is:pr is:merged merged:>={since}"
+        ).totalCount
+        if merged >= 30: return 100
+        if merged >= 15: return 75
+        if merged >= 5:  return 50
+        if merged >= 1:  return 25
+        return 0
+    except Exception:
+        return 50
+
+def score_security():
+    try:
+        tree = repo.get_git_tree(repo.default_branch, recursive=True).tree
+        security_doc = any(item.path == "SECURITY.md" for item in tree)
+    except Exception:
+        security_doc = False
+    alerts = None
+    try:
+        response = requests.get(
+            f"{GITHUB_API_URL}/repos/{REPO_NAME}/dependabot/alerts",
+            headers={"Authorization": f"Bearer {GITHUB_TOKEN}", "Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"},
+            params={"state": "open", "per_page": 100}, timeout=15,
+        )
+        if response.status_code == 200: alerts = response.json()
+    except Exception:
+        pass
+    if alerts is None:
+        # The API may be unavailable or permission-restricted. Do not invent a high score.
+        return 30 if security_doc else 0
+    score = 100 - (0 if security_doc else 3)
+    for alert in alerts:
+        severity = ((alert.get("security_advisory") or {}).get("severity") or "").lower()
+        score -= {"critical": 30, "high": 20, "moderate": 10, "medium": 10, "low": 4}.get(severity, 6)
+    return max(0, min(100, score))
+
 scores  = {
-    "readme":    score_readme(),
-    "activity":  score_activity(),
+    "readme": score_readme(),
+    "activity": score_activity(),
     "freshness": score_freshness(),
-    "docs":      score_docs(),
-    "ci":        score_ci(),
-    "issues":    score_issues(),
+    "docs": score_docs(),
+    "ci": score_ci(),
+    "issues": score_issues(),
     "community": score_community(),
+    "pr_velocity": score_pr_velocity(),
+    "security": score_security(),
 }
 health = int(sum(scores[k]*weights[k] for k in weights))
 
@@ -122,7 +186,7 @@ def dim_bar(score):
 badge_url = (f"https://img.shields.io/badge/DevLens%20Health-{health}%2F100"
              f"-{badge_color(health)}?style={BADGE_STYLE}&logo=github")
 
-report = {"repo":REPO_NAME,"score_model":"action-v1-7d","health_score":health,"scores":scores,
+report = {"repo":REPO_NAME,"score_model":"action-v2-9d","action_version":"2.1.0","health_score":health,"scores":scores,
           "badge_url":badge_url,"generated_at":now.isoformat()}
 
 print(json.dumps(report, indent=2))
@@ -135,15 +199,27 @@ with open(os.environ.get("GITHUB_OUTPUT","/dev/null"),"a") as f:
 DIM_META = [
     ("readme",    "\U0001f4dd", "README Quality",   "20%"),
     ("activity",  "\U0001f525", "Commit Activity",  "20%"),
-    ("freshness", "\U0001f33f", "Repo Freshness",   "15%"),
-    ("docs",      "\U0001f4da", "Documentation",    "15%"),
-    ("ci",        "\u2699\ufe0f",  "CI/CD Setup",    "15%"),
+    ("freshness", "\U0001f33f", "Repo Freshness",   "10%"),
+    ("docs",      "\U0001f4da", "Documentation",    "10%"),
+    ("ci",        "\u2699\ufe0f",  "CI/CD Setup",    "10%"),
     ("issues",    "\U0001f3af", "Issue Response",   "10%"),
     ("community", "\u2b50",     "Community Signal",  "5%"),
+    ("pr_velocity", "\U0001f500", "PR Velocity", "10%"),
+    ("security", "\U0001f510", "Security", "5%"),
 ]
 
+
+summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+if summary_path:
+    with open(summary_path, "a", encoding="utf-8") as summary:
+        summary.write("## DevLens Repository Health\\n\\n")
+        summary.write(f"**Overall health: {health}/100**\\n\\n")
+        summary.write("| Dimension | Score |\\n|---|---:|\\n")
+        for key, _icon, label, _weight in DIM_META:
+            summary.write(f"| {label} | {scores[key]}/100 |\\n")
+        summary.write("\\nModel: action-v2-9d\\n")
 def build_table():
-    """Build the full 7-row markdown table. Never truncated by AI."""
+    """Build the full 9-row markdown table. Never truncated by AI."""
     header = (
         f"![DevLens Health]({badge_url}) "
         f"**Overall health: {health}/100** \u2014 "
@@ -160,33 +236,6 @@ def build_table():
         rows += f"| {emoji} **{label}** | `{bar}` | ![{s}]({score_badge}) | {weight} |\n"
     return header + rows.rstrip()
 
-def get_ai_insight():
-    """Ask Groq for ONE sentence of insight. Returns empty string on any failure."""
-    if not GROQ_API_KEY:
-        return ""
-    prompt = (
-        f"The DevLens repo health score is {health}/100. "
-        f"Scores: {json.dumps(scores)}. "
-        "Write exactly ONE short sentence of actionable insight (no markdown, no heading). "
-        "Output ONLY that sentence."
-    )
-    try:
-        resp = requests.post(
-            "https://api.groq.com/openai/v1/chat/completions",
-            headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
-            json={"model": GROQ_MODEL, "messages": [{"role": "user", "content": prompt}], "max_tokens": 80},
-            timeout=15,
-        )
-        if resp.status_code == 200:
-            sentence = resp.json()["choices"][0]["message"]["content"].strip()
-            # Safety: reject anything that contains markdown table syntax
-            if "|" in sentence or "```" in sentence or "#" in sentence:
-                return ""
-            return sentence
-    except Exception as e:
-        print(f"Groq insight skipped: {e}")
-    return ""
-
 if UPDATE_README:
     try:
         rf      = repo.get_readme()
@@ -196,8 +245,7 @@ if UPDATE_README:
 
         # Build table first — guaranteed complete
         table   = build_table()
-        insight = get_ai_insight()
-        body    = table + ("\n\n" + insight if insight else "")
+        body    = table
         block   = f"{S_TAG}\n{body}\n{E_TAG}"
 
         if S_TAG in content and E_TAG in content:
@@ -208,16 +256,20 @@ if UPDATE_README:
             new = content + "\n\n" + block + "\n"
 
         if new != content:
-            repo.update_file(
-                rf.path,
-                f"docs: update DevLens health score {health}/100",
-                new, rf.sha
-            )
+            update_kwargs = {
+                "path": rf.path,
+                "message": f"docs: update DevLens health score {health}/100",
+                "content": new,
+                "sha": rf.sha,
+            }
+            if README_BRANCH:
+                update_kwargs["branch"] = README_BRANCH
+            repo.update_file(**update_kwargs)
             print(f"README updated. Score: {health}/100")
         else:
             print("README unchanged.")
     except Exception as e:
-        print(f"README update failed: {e}")
+        raise SystemExit(f"README update failed: {e}")
 
 if DISCORD_WH:
     try:
@@ -233,3 +285,12 @@ if DISCORD_WH:
         print("Discord digest sent.")
     except Exception as e:
         print(f"Discord failed: {e}")
+
+
+FAIL_ON_SCORE_BELOW = os.environ.get("FAIL_ON_SCORE_BELOW", "").strip()
+if FAIL_ON_SCORE_BELOW:
+    try:
+        threshold = int(FAIL_ON_SCORE_BELOW)
+        if not 0 <= threshold <= 100: raise ValueError
+        if health < threshold: raise SystemExit(f"DevLens health {health}/100 is below required threshold {threshold}/100")
+    except ValueError: raise SystemExit("FAIL_ON_SCORE_BELOW must be an integer from 0 to 100")
